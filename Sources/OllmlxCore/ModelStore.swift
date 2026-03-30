@@ -14,24 +14,12 @@ public final class ModelStore: Sendable {
 
     // MARK: - Cache Scanning
 
-    /// Check if a model is already downloaded in the HF cache
+    /// Check if a model is already downloaded in the HF cache.
+    /// Returns true only if the model has at least one .safetensors file (i.e. download is complete).
     public func isModelCached(_ repoID: String) -> Bool {
-        let fm = FileManager.default
         let dirName = "models--\(repoID.replacingOccurrences(of: "/", with: "--"))"
         let modelPath = "\(hfCacheDir)/\(dirName)"
-
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: modelPath, isDirectory: &isDir), isDir.boolValue else {
-            return false
-        }
-
-        let snapshotsPath = "\(modelPath)/snapshots"
-        guard fm.fileExists(atPath: snapshotsPath, isDirectory: &isDir), isDir.boolValue else {
-            return false
-        }
-
-        let snapshots = (try? fm.contentsOfDirectory(atPath: snapshotsPath)) ?? []
-        return !snapshots.isEmpty
+        return hasCompleteSafetensors(atModelPath: modelPath)
     }
 
     /// Scan the HF cache directory and return all locally cached MLX models
@@ -51,15 +39,9 @@ public final class ModelStore: Sendable {
             let repoID = String(parts)
 
             let modelPath = "\(hfCacheDir)/\(entry)"
-            let snapshotsPath = "\(modelPath)/snapshots"
 
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: snapshotsPath, isDirectory: &isDir), isDir.boolValue else {
-                continue
-            }
-
-            let snapshots = (try? fm.contentsOfDirectory(atPath: snapshotsPath)) ?? []
-            guard !snapshots.isEmpty else { continue }
+            // Only include models with at least one .safetensors file (complete downloads)
+            guard hasCompleteSafetensors(atModelPath: modelPath) else { continue }
 
             // Calculate total disk size across all snapshot files
             let diskSize = directorySize(atPath: modelPath)
@@ -96,6 +78,8 @@ public final class ModelStore: Sendable {
         let venvPath = config.venvPath
         let hfCLIPrimary = "\(venvPath)/bin/huggingface-cli"
         let hfCLIFallback = "\(venvPath)/bin/hf"
+
+        let hfCache = hfCacheDir
 
         return AsyncThrowingStream { continuation in
             let task = Task.detached { [logger] in
@@ -140,11 +124,19 @@ public final class ModelStore: Sendable {
                     }
                 }
 
+                // Helper to remove partial download on failure
+                let cleanupPartial = {
+                    let dirName = "models--\(model.replacingOccurrences(of: "/", with: "--"))"
+                    let partialPath = "\(hfCache)/\(dirName)"
+                    try? fm.removeItem(atPath: partialPath)
+                }
+
                 do {
                     try process.run()
                     process.waitUntilExit()
                 } catch {
                     stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    cleanupPartial()
                     continuation.finish(throwing: error)
                     return
                 }
@@ -152,6 +144,7 @@ public final class ModelStore: Sendable {
                 stderrPipe.fileHandleForReading.readabilityHandler = nil
 
                 if process.terminationStatus != 0 {
+                    cleanupPartial()
                     continuation.finish(throwing: ServerError.modelNotFound(
                         "huggingface-cli download failed with exit code \(process.terminationStatus)"
                     ))
@@ -169,6 +162,28 @@ public final class ModelStore: Sendable {
     }
 
     // MARK: - Private Helpers
+
+    /// Check if a model directory contains at least one .safetensors file in its snapshots.
+    /// Partial or failed downloads will have the directory structure but no weight files.
+    private func hasCompleteSafetensors(atModelPath modelPath: String) -> Bool {
+        let fm = FileManager.default
+        let snapshotsPath = "\(modelPath)/snapshots"
+
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: snapshotsPath, isDirectory: &isDir), isDir.boolValue else {
+            return false
+        }
+
+        let snapshots = (try? fm.contentsOfDirectory(atPath: snapshotsPath)) ?? []
+        for snapshot in snapshots {
+            let snapshotDir = "\(snapshotsPath)/\(snapshot)"
+            let files = (try? fm.contentsOfDirectory(atPath: snapshotDir)) ?? []
+            if files.contains(where: { $0.hasSuffix(".safetensors") }) {
+                return true
+            }
+        }
+        return false
+    }
 
     private func directorySize(atPath path: String) -> Int64 {
         let fm = FileManager.default

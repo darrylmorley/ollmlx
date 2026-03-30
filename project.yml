@@ -18,17 +18,21 @@ targets:
       - path: Sources/OllmlxApp
         excludes:
           - "Resources/**"
+          - "Assets.xcassets"
       - path: Sources/OllmlxApp/Resources
         type: folder
+        buildPhase: resources
+      - path: Sources/OllmlxApp/Assets.xcassets
         buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.darrylmorley.ollmlx
-        PRODUCT_NAME: OllmlxApp
+        PRODUCT_NAME: ollmlx
         INFOPLIST_FILE: Info.plist
         GENERATE_INFOPLIST_FILE: false
         CODE_SIGN_ENTITLEMENTS: $(PROJECT_DIR)/ollmlx.entitlements
         DEVELOPMENT_TEAM: M4RUJ7W6MP
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         COMBINE_HIDPI_IMAGES: true
         SWIFT_VERSION: "5.0"
         MACOSX_DEPLOYMENT_TARGET: "14.0"
@@ -65,6 +69,28 @@ targets:
         SUFeedURL: "https://github.com/darrylmorley/ollmlx/releases/latest/download/appcast.xml"
         SUPublicEDKey: "m/WL9PKIyMMY1Nx5dL9RzE3GqA+3FlR6OiWTC1IyCfA="
         SUEnableAutomaticChecks: true
+    preBuildScripts:
+      - name: Build and embed CLI
+        script: |
+          # Build the CLI binary via SPM
+          cd "${PROJECT_DIR}"
+          swift build -c release --product ollmlx 2>&1 || exit 1
+          CLI_BIN="$(swift build -c release --product ollmlx --show-bin-path)/ollmlx"
+
+          # Copy into the app bundle
+          DEST="${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/ollmlx-cli"
+          mkdir -p "$(dirname "${DEST}")"
+          cp -f "${CLI_BIN}" "${DEST}"
+
+          # Re-sign to match the app's signing identity (codesign --force re-signs)
+          if [ "${CODE_SIGN_IDENTITY}" != "" ] && [ "${CODE_SIGN_IDENTITY}" != "-" ]; then
+            codesign --force --sign "${EXPANDED_CODE_SIGN_IDENTITY}" \
+              --options runtime \
+              --timestamp \
+              "${DEST}"
+          fi
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(EXECUTABLE_FOLDER_PATH)/ollmlx-cli
     dependencies:
       - package: ollmlx-local
         product: OllmlxCore

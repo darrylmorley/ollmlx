@@ -4,14 +4,15 @@
 #
 # Usage: bash Scripts/build_dmg.sh
 #
-# Replace YOUR_TEAM_ID and YOUR_DEVELOPER_ID with real values before use.
+# Notarisation requires a keychain profile named "ollmlx".
+# Create it once with:
+#   xcrun notarytool store-credentials "ollmlx" --apple-id <email> --team-id M4RUJ7W6MP
 
 set -euo pipefail
 
 SCHEME="OllmlxApp"
 ARCHIVE_PATH="build/ollmlx.xcarchive"
 EXPORT_PATH="build/export"
-ENTITLEMENTS="ollmlx.entitlements"
 
 # Read version from the Xcode project or Info.plist
 VERSION=$(defaults read "$(pwd)/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "0.1.0")
@@ -26,13 +27,19 @@ echo "Version: ${VERSION}"
 echo "Output:  ${OUTPUT_DIR}/${DMG_NAME}"
 echo ""
 
-# 1. Clean previous build artifacts
-echo "[1/6] Cleaning previous build..."
+# 1. Build CLI binary (needed by Copy Files phase in Xcode archive)
+echo "[1/7] Building CLI..."
+swift build -c release --product ollmlx 2>&1 | tail -5
+CLI_BIN="$(swift build -c release --product ollmlx --show-bin-path)/ollmlx"
+echo "CLI binary: ${CLI_BIN}"
+
+# 2. Clean previous build artifacts
+echo "[2/7] Cleaning previous build..."
 rm -rf "${ARCHIVE_PATH}" "${EXPORT_PATH}" "${OUTPUT_DIR}/${DMG_NAME}"
 mkdir -p "${OUTPUT_DIR}"
 
-# 2. Archive
-echo "[2/6] Archiving..."
+# 3. Archive menubar app (includes CLI via Copy Files build phase)
+echo "[3/7] Archiving app..."
 xcodebuild -resolvePackageDependencies -scheme "${SCHEME}" 2>&1 | tail -3
 xcodebuild archive \
     -scheme "${SCHEME}" \
@@ -49,8 +56,8 @@ xcodebuild archive \
 
 echo "Archive complete."
 
-# 3. Export
-echo "[3/6] Exporting signed app..."
+# 4. Export
+echo "[4/7] Exporting signed app..."
 
 # Create export options plist
 cat > "${OUTPUT_DIR}/export_options.plist" <<'EXPORTEOF'
@@ -74,49 +81,46 @@ xcodebuild -exportArchive \
 
 echo "Export complete."
 
-# 4. Notarise
-echo "[4/6] Notarising..."
-APP_PATH="${EXPORT_PATH}/OllmlxApp.app"
+# 5. Stage only the .app for DMG (exclude Xcode export metadata)
+echo "[5/7] Staging app for DMG..."
+APP_PATH="${EXPORT_PATH}/ollmlx.app"
+STAGING_DIR="${OUTPUT_DIR}/staging"
+rm -rf "${STAGING_DIR}"
+mkdir -p "${STAGING_DIR}"
+cp -R "${APP_PATH}" "${STAGING_DIR}/"
 
-if [ -d "${APP_PATH}" ]; then
-    xcrun notarytool submit "${APP_PATH}" \
-        --team-id "${TEAM_ID}" \
-        --wait \
-        || echo "WARNING: Notarisation failed or skipped. Set TEAM_ID and credentials."
-
-    xcrun stapler staple "${APP_PATH}" \
-        || echo "WARNING: Stapling failed."
-else
-    echo "WARNING: App not found at ${APP_PATH} — skipping notarisation."
-fi
-
-# 5. Install create-dmg if needed
-echo "[5/6] Preparing DMG tool..."
+# Install create-dmg if needed
 if ! command -v create-dmg &>/dev/null; then
     echo "Installing create-dmg via Homebrew..."
     brew install create-dmg
 fi
 
 # 6. Create DMG
-echo "[6/6] Creating DMG..."
+echo "[6/7] Creating DMG..."
 create-dmg \
     --volname "ollmlx" \
-    --volicon "${APP_PATH}/Contents/Resources/AppIcon.icns" \
-    --window-pos 200 120 \
-    --window-size 600 400 \
-    --icon-size 100 \
-    --icon "OllmlxApp.app" 150 190 \
-    --app-drop-link 450 190 \
-    --no-internet-enable \
+    --window-size 540 380 \
+    --icon-size 128 \
+    --icon "ollmlx.app" 160 190 \
+    --hide-extension "ollmlx.app" \
+    --app-drop-link 380 190 \
     "${OUTPUT_DIR}/${DMG_NAME}" \
-    "${EXPORT_PATH}/" \
+    "${STAGING_DIR}/" \
     || {
         # create-dmg exits non-zero if icon positioning fails but DMG is still created
         # Fall back to simpler hdiutil approach
         echo "create-dmg styling failed — creating basic DMG with hdiutil..."
-        hdiutil create -volname "ollmlx" -srcfolder "${EXPORT_PATH}" \
+        hdiutil create -volname "ollmlx" -srcfolder "${STAGING_DIR}" \
             -ov -format UDZO "${OUTPUT_DIR}/${DMG_NAME}"
     }
+
+# 7. Notarise and staple the DMG
+echo "[7/7] Notarising DMG..."
+xcrun notarytool submit "${OUTPUT_DIR}/${DMG_NAME}" \
+    --keychain-profile "ollmlx" \
+    --wait
+
+xcrun stapler staple "${OUTPUT_DIR}/${DMG_NAME}"
 
 echo ""
 echo "=== Build complete ==="

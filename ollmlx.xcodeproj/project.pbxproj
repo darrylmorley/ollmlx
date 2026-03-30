@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		044ED1135F1489B287385799 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1C22D57C1EBCC2A17AE28937 /* Assets.xcassets */; };
 		04D838EB51F223FE8B40266C /* MenuBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6348DEDB973F08CC4F699A45 /* MenuBarView.swift */; };
 		0DAAF732B1732F3B3FC2F11F /* Resources in Resources */ = {isa = PBXBuildFile; fileRef = E570DDBFE96EBDB2927E7ABF /* Resources */; };
 		19D6A7D4873C80397DEE6BBB /* BootstrapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D084DA76F5767E152D3AE75A /* BootstrapView.swift */; };
@@ -22,6 +23,7 @@
 /* Begin PBXFileReference section */
 		0654C36680915B3DD25644F8 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		172418F59F795A1264375E85 /* OllmlxApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OllmlxApp.swift; sourceTree = "<group>"; };
+		1C22D57C1EBCC2A17AE28937 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		21B5FA7AE88D8A3557A5FDD2 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		3253390F8A401B407D32E817 /* ModelListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelListView.swift; sourceTree = "<group>"; };
 		6348DEDB973F08CC4F699A45 /* MenuBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MenuBarView.swift; sourceTree = "<group>"; };
@@ -57,6 +59,7 @@
 			isa = PBXGroup;
 			children = (
 				21B5FA7AE88D8A3557A5FDD2 /* AppDelegate.swift */,
+				1C22D57C1EBCC2A17AE28937 /* Assets.xcassets */,
 				D084DA76F5767E152D3AE75A /* BootstrapView.swift */,
 				F80D1429753C2E105B639064 /* CLIInstallView.swift */,
 				6348DEDB973F08CC4F699A45 /* MenuBarView.swift */,
@@ -93,6 +96,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 0B1EF2976B9DA11EF0714C56 /* Build configuration list for PBXNativeTarget "OllmlxApp" */;
 			buildPhases = (
+				D019DFFD3D498A367AA5F521 /* Build and embed CLI */,
 				A8F40462FDFB9F657FA970C7 /* Sources */,
 				67CBB01481D515E975B360B1 /* Resources */,
 				CA30B3C5F434D90BB28C085C /* Frameworks */,
@@ -151,11 +155,34 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				044ED1135F1489B287385799 /* Assets.xcassets in Resources */,
 				0DAAF732B1732F3B3FC2F11F /* Resources in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		D019DFFD3D498A367AA5F521 /* Build and embed CLI */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build and embed CLI";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+				"$(BUILT_PRODUCTS_DIR)/$(EXECUTABLE_FOLDER_PATH)/ollmlx-cli",
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "# Build the CLI binary via SPM\ncd \"${PROJECT_DIR}\"\nswift build -c release --product ollmlx 2>&1 || exit 1\nCLI_BIN=\"$(swift build -c release --product ollmlx --show-bin-path)/ollmlx\"\n\n# Copy into the app bundle\nDEST=\"${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/ollmlx-cli\"\nmkdir -p \"$(dirname \"${DEST}\")\"\ncp -f \"${CLI_BIN}\" \"${DEST}\"\n\n# Re-sign to match the app's signing identity (codesign --force re-signs)\nif [ \"${CODE_SIGN_IDENTITY}\" != \"\" ] && [ \"${CODE_SIGN_IDENTITY}\" != \"-\" ]; then\n  codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \\\n    --options runtime \\\n    --timestamp \\\n    \"${DEST}\"\nfi\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		A8F40462FDFB9F657FA970C7 /* Sources */ = {
@@ -191,7 +218,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.darrylmorley.ollmlx;
-				PRODUCT_NAME = OllmlxApp;
+				PRODUCT_NAME = ollmlx;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;
@@ -217,7 +244,7 @@
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 0.1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.darrylmorley.ollmlx;
-				PRODUCT_NAME = OllmlxApp;
+				PRODUCT_NAME = ollmlx;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SUPPORTS_MACCATALYST = NO;

@@ -108,17 +108,13 @@ struct CLIInstallView: View {
         errorMessage = nil
 
         Task {
-            // Find the actual CLI binary path inside the app bundle
-            let appPath = Bundle.main.bundlePath
-            // The CLI binary built by SPM won't be in the app bundle in development.
-            // In a distributed app, it would be at Contents/MacOS/ollmlx or a helper.
-            // For now, we create a symlink to the app's executable.
-            let executablePath = Bundle.main.executablePath ?? "\(appPath)/Contents/MacOS/ollmlx"
+            // The CLI binary is bundled at Contents/MacOS/ollmlx-cli
+            let cliPath = Bundle.main.bundlePath + "/Contents/MacOS/ollmlx-cli"
 
             // Use AppleScript to create the symlink with admin privileges.
             // This shows the standard macOS admin password dialog.
             let script = """
-            do shell script "mkdir -p /usr/local/bin && ln -sf '\(executablePath)' '\(symlinkPath)'" with administrator privileges
+            do shell script "mkdir -p /usr/local/bin && ln -sf '\(cliPath)' '\(symlinkPath)'" with administrator privileges
             """
 
             var error: NSDictionary?
