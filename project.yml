@@ -1,0 +1,72 @@
+name: ollmlx
+options:
+  bundleIdPrefix: com.ollmlx
+  deploymentTarget:
+    macOS: "14.0"
+  xcodeVersion: "15.0"
+  generateEmptyDirectories: false
+
+packages:
+  ollmlx-local:
+    path: .
+
+targets:
+  OllmlxApp:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/OllmlxApp
+        excludes:
+          - "Resources/**"
+      - path: Sources/OllmlxApp/Resources
+        type: folder
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.darrylmorley.ollmlx
+        PRODUCT_NAME: OllmlxApp
+        INFOPLIST_FILE: Info.plist
+        GENERATE_INFOPLIST_FILE: false
+        CODE_SIGN_ENTITLEMENTS: $(PROJECT_DIR)/ollmlx.entitlements
+        DEVELOPMENT_TEAM: M4RUJ7W6MP
+        COMBINE_HIDPI_IMAGES: true
+        SWIFT_VERSION: "5.0"
+        MACOSX_DEPLOYMENT_TARGET: "14.0"
+        SUPPORTED_PLATFORMS: macosx
+        SUPPORTS_MACCATALYST: false
+        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.1.0"
+        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
+      configs:
+        Debug:
+          SWIFT_OPTIMIZATION_LEVEL: "-Onone"
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG"
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "-"
+        Release:
+          SWIFT_OPTIMIZATION_LEVEL: "-O"
+          SWIFT_COMPILATION_MODE: wholemodule
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+    entitlements:
+      path: ollmlx.entitlements
+      properties:
+        com.apple.security.cs.allow-unsigned-executable-memory: true
+        com.apple.security.network.client: true
+        com.apple.security.network.server: true
+        com.apple.security.temporary-exception.sbpl: '(allow process-exec (literal "/bin/sh"))'
+    info:
+      path: Info.plist
+      properties:
+        CFBundleName: ollmlx
+        CFBundleDisplayName: ollmlx
+        CFBundleShortVersionString: "0.1.0"
+        LSUIElement: true
+        SUFeedURL: "https://github.com/darrylmorley/ollmlx/releases/latest/download/appcast.xml"
+        SUPublicEDKey: "m/WL9PKIyMMY1Nx5dL9RzE3GqA+3FlR6OiWTC1IyCfA="
+        SUEnableAutomaticChecks: true
+    dependencies:
+      - package: ollmlx-local
+        product: OllmlxCore
+      - package: ollmlx-local
+        product: Sparkle

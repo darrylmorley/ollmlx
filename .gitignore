@@ -1,0 +1,45 @@
+# Xcode
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcworkspace/contents.xcworkspacedata
+DerivedData/
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+*.mode1v3
+!default.mode1v3
+*.mode2v3
+!default.mode2v3
+*.perspectivev3
+!default.perspectivev3
+
+# Swift Package Manager
+.build/
+.swiftpm/
+*.resolved
+
+# Xcode generated
+ollmlx.xcodeproj/project.xcworkspace/
+ollmlx.xcodeproj/xcuserdata/
+
+# Build output
+build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Credentials — never commit these
+*.p12
+*.cer
+*.mobileprovision
+ExportOptions.plist
+
+# Sparkle private key is stored in Keychain — never commit it
+# If you ever export it, make sure it stays out of the repo
+sparkle_private_key*
+private_key*
