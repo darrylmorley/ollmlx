@@ -24,7 +24,7 @@ final class ProxyServerTests: XCTestCase {
     // MARK: - 503 when no upstream
 
     func testReturns503WhenNoUpstreamSet() async throws {
-        let proxy = ProxyServer()
+        let proxy = ProxyServer(upstreamWaitTimeout: 0)
         let app = proxy.buildApplication()
 
         try await app.test(.router) { client in
@@ -39,7 +39,7 @@ final class ProxyServerTests: XCTestCase {
     }
 
     func testReturns503ForPostWhenNoUpstream() async throws {
-        let proxy = ProxyServer()
+        let proxy = ProxyServer(upstreamWaitTimeout: 0)
         let app = proxy.buildApplication()
 
         try await app.test(.router) { client in
@@ -107,7 +107,7 @@ final class ProxyServerTests: XCTestCase {
     func testPassesWithCorrectAPIKey() async throws {
         try Keychain.setAPIKey("my-secret")
 
-        let proxy = ProxyServer()
+        let proxy = ProxyServer(upstreamWaitTimeout: 0)
         let app = proxy.buildApplication()
 
         try await app.test(.router) { client in
@@ -125,7 +125,7 @@ final class ProxyServerTests: XCTestCase {
 
     func testNoAPIKeyRequiredWhenNotConfigured() async throws {
         // Keychain cleared in setUp — requests should pass through to upstream check
-        let proxy = ProxyServer()
+        let proxy = ProxyServer(upstreamWaitTimeout: 0)
         let app = proxy.buildApplication()
 
         try await app.test(.router) { client in
@@ -171,7 +171,7 @@ final class ProxyServerTests: XCTestCase {
     // MARK: - All HTTP methods get 503
 
     func testAllHTTPMethodsReturn503WhenNoUpstream() async throws {
-        let proxy = ProxyServer()
+        let proxy = ProxyServer(upstreamWaitTimeout: 0)
         let app = proxy.buildApplication()
 
         try await app.test(.router) { client in
@@ -196,7 +196,7 @@ final class ProxyServerTests: XCTestCase {
     // MARK: - Error response format
 
     func testErrorResponseIsJSON() async throws {
-        let proxy = ProxyServer()
+        let proxy = ProxyServer(upstreamWaitTimeout: 0)
         let app = proxy.buildApplication()
 
         try await app.test(.router) { client in

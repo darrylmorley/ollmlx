@@ -58,7 +58,7 @@ public final class ServerManager: ObservableObject {
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: pythonPath)
         proc.arguments = [
-            "-m", "mlx_lm.server",
+            "-m", "mlx_lm", "server",
             "--model", model,
             "--port", String(internalPort),
             "--max-tokens", String(config.maxTokens),

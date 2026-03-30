@@ -14,11 +14,13 @@ public final class ProxyServer: Sendable {
     private let upstream: UpstreamState
     private let config: OllmlxConfig
     private let logger: OllmlxLogger
+    let upstreamWaitTimeout: TimeInterval
 
-    public init(config: OllmlxConfig = .shared, logger: OllmlxLogger = .shared) {
+    public init(config: OllmlxConfig = .shared, logger: OllmlxLogger = .shared, upstreamWaitTimeout: TimeInterval = 30) {
         self.upstream = UpstreamState()
         self.config = config
         self.logger = logger
+        self.upstreamWaitTimeout = upstreamWaitTimeout
     }
 
     // MARK: - Upstream Management (actor-isolated, atomic)
@@ -48,6 +50,7 @@ public final class ProxyServer: Sendable {
         let upstreamState = self.upstream
         let config = self.config
         let logger = self.logger
+        let waitTimeout = self.upstreamWaitTimeout
         let modelStore = ModelStore.shared
 
         // Ollama-compatible API endpoints (registered before catch-all)
@@ -72,25 +75,25 @@ public final class ProxyServer: Sendable {
 
         // Catch-all: forward every request to the upstream
         router.on("**", method: .get) { request, context in
-            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger)
+            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger, waitTimeout: waitTimeout)
         }
         router.on("**", method: .post) { request, context in
-            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger)
+            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger, waitTimeout: waitTimeout)
         }
         router.on("**", method: .put) { request, context in
-            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger)
+            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger, waitTimeout: waitTimeout)
         }
         router.on("**", method: .delete) { request, context in
-            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger)
+            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger, waitTimeout: waitTimeout)
         }
         router.on("**", method: .patch) { request, context in
-            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger)
+            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger, waitTimeout: waitTimeout)
         }
         router.on("**", method: .options) { request, context in
-            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger)
+            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger, waitTimeout: waitTimeout)
         }
         router.on("**", method: .head) { request, context in
-            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger)
+            try await Self.proxyRequest(request: request, context: context, upstream: upstreamState, config: config, logger: logger, waitTimeout: waitTimeout)
         }
 
         let bindHost = config.allowExternalConnections ? "0.0.0.0" : "127.0.0.1"
@@ -110,7 +113,8 @@ public final class ProxyServer: Sendable {
         context: some RequestContext,
         upstream: UpstreamState,
         config: OllmlxConfig,
-        logger: OllmlxLogger
+        logger: OllmlxLogger,
+        waitTimeout: TimeInterval = 30
     ) async throws -> Response {
         // 1. API key check — validate BEFORE forwarding
         if let expectedKey = config.apiKey, !expectedKey.isEmpty {
@@ -121,8 +125,8 @@ public final class ProxyServer: Sendable {
             }
         }
 
-        // 2. Get upstream port — 503 immediately if none
-        guard let port = await upstream.port else {
+        // 2. Get upstream port — wait during model switches before returning 503
+        guard let port = await Self.waitForUpstream(upstream: upstream, logger: logger, timeout: waitTimeout) else {
             return Self.errorResponse(status: .serviceUnavailable, message: "No model is currently running")
         }
 
@@ -222,6 +226,38 @@ public final class ProxyServer: Sendable {
                 body: .init(byteBuffer: ByteBuffer(data: responseData))
             )
         }
+    }
+
+    // MARK: - Upstream Availability
+
+    /// During model switches the upstream port is temporarily nil. Rather than returning
+    /// 503 immediately (which causes Open WebUI to show errors), poll for up to 30 seconds
+    /// waiting for the upstream to become available.
+    private static func waitForUpstream(
+        upstream: UpstreamState,
+        logger: OllmlxLogger,
+        timeout: TimeInterval = 30,
+        pollInterval: UInt64 = 500_000_000 // 500ms
+    ) async -> Int? {
+        // Fast path — upstream already available
+        if let port = await upstream.port {
+            return port
+        }
+
+        // Poll until upstream appears or timeout
+        let deadline = Date().addingTimeInterval(timeout)
+        logger.info("Upstream unavailable — waiting up to \(Int(timeout))s for model switch")
+
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: pollInterval)
+            if let port = await upstream.port {
+                logger.info("Upstream became available on port \(port)")
+                return port
+            }
+        }
+
+        logger.info("Upstream wait timed out after \(Int(timeout))s")
+        return nil
     }
 
     // MARK: - Ollama API Compatibility

@@ -180,7 +180,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "# Build the CLI binary via SPM\ncd \"${PROJECT_DIR}\"\nswift build -c release --product ollmlx 2>&1 || exit 1\nCLI_BIN=\"$(swift build -c release --product ollmlx --show-bin-path)/ollmlx\"\n\n# Copy into the app bundle\nDEST=\"${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/ollmlx-cli\"\nmkdir -p \"$(dirname \"${DEST}\")\"\ncp -f \"${CLI_BIN}\" \"${DEST}\"\n\n# Re-sign to match the app's signing identity (codesign --force re-signs)\nif [ \"${CODE_SIGN_IDENTITY}\" != \"\" ] && [ \"${CODE_SIGN_IDENTITY}\" != \"-\" ]; then\n  codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \\\n    --options runtime \\\n    --timestamp \\\n    \"${DEST}\"\nfi\n";
+			shellScript = "# Build the CLI binary via SPM\n# Use xcrun to resolve swift — bare `swift` is not on PATH during xcodebuild archive\nSWIFT=\"$(xcrun --find swift)\"\ncd \"${SRCROOT}\"\n\"${SWIFT}\" build -c release --product ollmlx --package-path \"${SRCROOT}\" 2>&1 || exit 1\nCLI_BIN=\"$(\"${SWIFT}\" build -c release --product ollmlx --package-path \"${SRCROOT}\" --show-bin-path)/ollmlx\"\n\n# Copy into the app bundle\nDEST=\"${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/ollmlx-cli\"\nmkdir -p \"$(dirname \"${DEST}\")\"\ncp -f \"${CLI_BIN}\" \"${DEST}\"\n\n# Re-sign to match the app's signing identity (codesign --force re-signs)\nif [ \"${CODE_SIGN_IDENTITY}\" != \"\" ] && [ \"${CODE_SIGN_IDENTITY}\" != \"-\" ]; then\n  codesign --force --sign \"${EXPANDED_CODE_SIGN_IDENTITY}\" \\\n    --options runtime \\\n    --timestamp \\\n    \"${DEST}\"\nfi\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 

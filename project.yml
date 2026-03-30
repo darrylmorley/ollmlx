@@ -73,9 +73,11 @@ targets:
       - name: Build and embed CLI
         script: |
           # Build the CLI binary via SPM
-          cd "${PROJECT_DIR}"
-          swift build -c release --product ollmlx 2>&1 || exit 1
-          CLI_BIN="$(swift build -c release --product ollmlx --show-bin-path)/ollmlx"
+          # Use xcrun to resolve swift — bare `swift` is not on PATH during xcodebuild archive
+          SWIFT="$(xcrun --find swift)"
+          cd "${SRCROOT}"
+          "${SWIFT}" build -c release --product ollmlx --package-path "${SRCROOT}" 2>&1 || exit 1
+          CLI_BIN="$("${SWIFT}" build -c release --product ollmlx --package-path "${SRCROOT}" --show-bin-path)/ollmlx"
 
           # Copy into the app bundle
           DEST="${BUILT_PRODUCTS_DIR}/${EXECUTABLE_FOLDER_PATH}/ollmlx-cli"
