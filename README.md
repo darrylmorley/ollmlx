@@ -10,7 +10,16 @@ Run local LLMs on Apple Silicon via [mlx-lm](https://github.com/ml-explore/mlx-e
 
 ## Installation
 
-1. Download the latest `ollmlx-x.x.x.dmg` from the [releases page](https://github.com/yourusername/ollmlx/releases)
+### Homebrew (recommended)
+
+```bash
+brew tap darrylmorley/ollmlx
+brew install --cask darrylmorley/ollmlx/ollmlx
+```
+
+### Manual
+
+1. Download the latest `ollmlx-x.x.x.dmg` from the [releases page](https://github.com/darrylmorley/ollmlx/releases)
 2. Drag `ollmlx.app` to `/Applications`
 3. Launch from Applications or Spotlight
 
@@ -39,7 +48,7 @@ The daemon starts automatically when the app launches — no manual setup needed
 
 ### CLI
 
-The daemon is started automatically by the menubar app. If you want to run CLI-only without the app, start the daemon manually first:
+The daemon is started automatically by the menubar app. If you installed via Homebrew, the `ollmlx` CLI is available immediately in any terminal. If you want to run CLI-only without the app, start the daemon manually first:
 
 ```bash
 ollmlx serve
@@ -98,7 +107,7 @@ If a real Ollama installation is detected at that path, the toggle will warn you
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/ollmlx.git
+git clone https://github.com/darrylmorley/ollmlx.git
 cd ollmlx
 
 # Build the CLI only
@@ -110,9 +119,9 @@ swift build
 # Run tests
 swift test
 
-# Build the app via Xcode — open Package.swift in Xcode,
+# Build the app via Xcode — open the project,
 # select the OllmlxApp scheme, and hit Cmd+R
-open Package.swift
+open ollmlx.xcodeproj
 
 # Create a signed DMG (requires Developer ID)
 bash Scripts/build_dmg.sh
