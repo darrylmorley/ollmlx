@@ -24,6 +24,7 @@ public enum ControlClientError: Error, LocalizedError {
     case daemonNotRunning
     case unexpectedStatus(Int)
     case decodingFailed
+    case serverError(String)
 
     public var errorDescription: String? {
         switch self {
@@ -33,6 +34,8 @@ public enum ControlClientError: Error, LocalizedError {
             return "Unexpected HTTP status: \(code)"
         case .decodingFailed:
             return "Failed to decode response from daemon"
+        case .serverError(let message):
+            return message
         }
     }
 }

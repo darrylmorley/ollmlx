@@ -254,7 +254,7 @@ final class ProxyServerTests: XCTestCase {
 
                 let data = Data(buffer: response.body)
                 let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                XCTAssertEqual(json?["version"] as? String, "0.1.0")
+                XCTAssertEqual(json?["version"] as? String, "0.1.1")
             }
         }
     }

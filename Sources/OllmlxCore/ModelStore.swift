@@ -127,7 +127,7 @@ public final class ModelStore: Sendable {
 
                     let process = Process()
                     process.executableURL = URL(fileURLWithPath: hfCLI)
-                    process.arguments = ["download", "--resume-download", model]
+                    process.arguments = ["download", model]
 
                     // Pass HF token as environment variable for authenticated downloads
                     if let hfToken = Keychain.getHFToken(), !hfToken.isEmpty {
@@ -157,6 +157,9 @@ public final class ModelStore: Sendable {
                             continuation.yield(progress)
                         }
                     }
+
+                    let cmdLine = [hfCLI] + (process.arguments ?? [])
+                    logger.info("Running: \(cmdLine.joined(separator: " "))")
 
                     do {
                         try process.run()

@@ -96,9 +96,15 @@ public final class ControlClient: Sendable {
                             break
                         }
 
-                        // Check for error event
+                        // Check for error event — extract the message from {"error":"..."}
                         if payload.contains("\"error\"") {
-                            continuation.finish(throwing: ControlClientError.decodingFailed)
+                            if let data = payload.data(using: .utf8),
+                               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                               let errorMsg = json["error"] as? String {
+                                continuation.finish(throwing: ControlClientError.serverError(errorMsg))
+                            } else {
+                                continuation.finish(throwing: ControlClientError.decodingFailed)
+                            }
                             return
                         }
 

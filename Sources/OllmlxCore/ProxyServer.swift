@@ -60,7 +60,7 @@ public final class ProxyServer: Sendable {
         }
 
         router.get("api/version") { request, context -> Response in
-            Self.jsonOK(#"{"version":"0.1.0"}"#)
+            Self.jsonOK(#"{"version":"0.1.1"}"#)
         }
 
         router.post("api/chat") { request, context -> Response in

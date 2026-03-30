@@ -39,7 +39,7 @@ targets:
         SUPPORTED_PLATFORMS: macosx
         SUPPORTS_MACCATALYST: false
         CURRENT_PROJECT_VERSION: "1"
-        MARKETING_VERSION: "0.1.0"
+        MARKETING_VERSION: "0.1.1"
         LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks"
       configs:
         Debug:
@@ -64,7 +64,7 @@ targets:
       properties:
         CFBundleName: ollmlx
         CFBundleDisplayName: ollmlx
-        CFBundleShortVersionString: "0.1.0"
+        CFBundleShortVersionString: "0.1.1"
         LSUIElement: true
         SUFeedURL: "https://github.com/darrylmorley/ollmlx/releases/latest/download/appcast.xml"
         SUPublicEDKey: "m/WL9PKIyMMY1Nx5dL9RzE3GqA+3FlR6OiWTC1IyCfA="
