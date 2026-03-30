@@ -1,10 +1,11 @@
+import AppKit
 import SwiftUI
 import OllmlxCore
 
-/// Pull model sheet — accepts a HF repo ID, shows live progress bar, dismisses on completion.
+/// Pull model window — accepts a HF repo ID, shows live progress bar, closes on completion.
+/// Opened as a standalone NSWindow via AppDelegate (not a sheet — sheets on popovers deadlock).
 /// Consumes the SSE stream from ControlClient.pull(), not ModelStore directly.
 struct ModelListView: View {
-    @Binding var isPresented: Bool
     var onComplete: () -> Void
 
     @State private var modelID = ""
@@ -44,7 +45,7 @@ struct ModelListView: View {
             HStack {
                 Button("Cancel") {
                     pullTask?.cancel()
-                    isPresented = false
+                    closeWindow()
                 }
                 .keyboardShortcut(.cancelAction)
 
@@ -59,6 +60,11 @@ struct ModelListView: View {
         }
         .padding(20)
         .frame(width: 400)
+        .frame(minHeight: 160)
+    }
+
+    private func closeWindow() {
+        NSApplication.shared.keyWindow?.close()
     }
 
     private func startPull() {
@@ -89,7 +95,7 @@ struct ModelListView: View {
                 onComplete()
                 // Dismiss after a brief moment
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                isPresented = false
+                closeWindow()
             } catch is CancellationError {
                 // User cancelled
             } catch {

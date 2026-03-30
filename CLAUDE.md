@@ -99,7 +99,8 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - **Single instance**: `applicationDidFinishLaunching` must check `NSRunningApplication.runningApplications(withBundleIdentifier:)` — if `count > 1`, activate the existing instance and terminate self
 - **Daemon auto-start**: `DaemonServer` and `ProxyServer` are started automatically in `applicationDidFinishLaunching` via `Task.detached`
 - **Bootstrap detection**: Check both `OllmlxConfig.pythonPath` AND the default venv path `~/.ollmlx/venv/bin/python` — if either exists on disk, skip bootstrap and set config
-- **Settings window**: Always open as a standalone `NSWindow` via `AppDelegate` — **never** as a `.sheet()` on the NSPopover (sheets on popovers deadlock the entire app)
+- **Settings window**: Always open as a standalone `NSWindow` via `AppDelegate` — **never** as a `.sheet()` on the NSPopover (sheets on popovers deadlock the entire app, and crash on macOS 26 Tahoe)
+- **Pull Model window**: Same as Settings — always open as a standalone `NSWindow` via `AppDelegate` notification (`.openPullModel`), never as a `.sheet()` on the popover
 - **Model selector**: The dropdown only updates a `@State` selection — it must **never** call `ServerManager.start()`. Starting/switching happens only when the user clicks the Start button. `MenuBarView` uses `.onChange(of: serverManager.state)` to sync the selected model when external clients trigger a model switch
 
 ### Security
@@ -114,6 +115,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - `waitForServer()` must check `process.isRunning` on **every** poll iteration — fast-fail immediately on process death, don't wait out the full 120-second timeout
 - `allocateEphemeralPort()` must bind to port 0, read the assigned port, then close the socket before returning — never hardcode internal ports
 - `ModelStore.pull()` must use `$VENV/bin/huggingface-cli` (with fallback to `$VENV/bin/hf`) — never `huggingface-cli` from PATH
+- `install_mlx_lm.sh` installs `huggingface-hub` (without `[cli]` extra) — `huggingface-hub >=1.8.0` installs the CLI as `hf` not `huggingface-cli`, so the bootstrap script checks for both and creates a symlink if needed
 - `ServerManager.start()` must call `ModelStore.isModelCached()` before spawning — throw `ServerError.modelNotFound` if the model is not in the local cache
 
 ### Proxy
@@ -183,7 +185,8 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 
 ```
 ~/.ollmlx/venv/bin/python           # stored in UserDefaults after bootstrap
-~/.ollmlx/venv/bin/huggingface-cli  # primary HF CLI binary (fallback: ~/.ollmlx/venv/bin/hf)
+~/.ollmlx/venv/bin/huggingface-cli  # HF CLI binary (may be a symlink to hf on huggingface-hub >=1.8.0)
+~/.ollmlx/venv/bin/hf              # HF CLI binary (huggingface-hub >=1.8.0 installs this instead of huggingface-cli)
 ~/.ollmlx/logs/server.log           # current log
 ~/.ollmlx/logs/server.log.1         # previous log (rotated)
 ~/.cache/huggingface/hub/           # HF model cache (only models--mlx-community--* are listed)
@@ -203,7 +206,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - Do not call `huggingface-cli` from PATH — always use the venv binary (`huggingface-cli` or `hf` fallback)
 - Do not buffer streaming proxy responses — forward chunks immediately
 - Do not put `defer { session.invalidateAndCancel() }` on the outer scope of proxy handlers that return streaming `ResponseBody` closures
-- Do not use `.sheet()` to present views from an NSPopover — it deadlocks the app
+- Do not use `.sheet()` to present views from an NSPopover — it deadlocks the app and crashes on macOS 26 Tahoe. Always use standalone `NSWindow` via AppDelegate notifications instead
 - Do not call `ServerManager.start()` from model selector onChange — only from explicit Start button or Ollama API model-switch logic
 - Do not call `ServerManager.stop()`/`start()` directly from proxy route handlers — always go through `ModelSwitchCoordinator.ensureModel()` to prevent concurrent model-switch race conditions
 - Do not use `/usr/bin/env` to find tools like `uv` from the macOS app — resolve absolute paths

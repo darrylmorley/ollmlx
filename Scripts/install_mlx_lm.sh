@@ -1,5 +1,5 @@
 #!/bin/bash
-# install_mlx_lm.sh — Bootstrap Python venv with mlx-lm and huggingface-hub[cli]
+# install_mlx_lm.sh — Bootstrap Python venv with mlx-lm and huggingface-hub
 # Uses uv from astral.sh — never Homebrew.
 # On success, prints the python path as the last line of stdout.
 
@@ -39,9 +39,9 @@ if ! "$VENV_DIR/bin/python" --version &>/dev/null; then
     uv venv "$VENV_DIR"
 fi
 
-# 3. Install mlx-lm and huggingface-hub[cli]
-echo "Installing mlx-lm and huggingface-hub[cli]..."
-uv pip install --python "$VENV_DIR/bin/python" mlx-lm "huggingface-hub[cli]"
+# 3. Install mlx-lm and huggingface-hub
+echo "Installing mlx-lm and huggingface-hub..."
+uv pip install --python "$VENV_DIR/bin/python" mlx-lm huggingface-hub
 
 # 4. Verify installations
 if ! "$VENV_DIR/bin/python" -c "import mlx_lm" 2>/dev/null; then
@@ -49,8 +49,20 @@ if ! "$VENV_DIR/bin/python" -c "import mlx_lm" 2>/dev/null; then
     exit 1
 fi
 
+# huggingface-hub >=1.8.0 installs CLI as 'hf' instead of 'huggingface-cli'
+if [ -f "$VENV_DIR/bin/huggingface-cli" ]; then
+    echo "Found huggingface-cli"
+elif [ -f "$VENV_DIR/bin/hf" ]; then
+    echo "Found hf — creating huggingface-cli symlink"
+    ln -sf "$VENV_DIR/bin/hf" "$VENV_DIR/bin/huggingface-cli"
+else
+    echo "ERROR: neither huggingface-cli nor hf found in $VENV_DIR/bin/" >&2
+    exit 1
+fi
+
+# Final verification
 if [ ! -f "$VENV_DIR/bin/huggingface-cli" ]; then
-    echo "ERROR: huggingface-cli not found at $VENV_DIR/bin/huggingface-cli" >&2
+    echo "ERROR: huggingface-cli not available after install" >&2
     exit 1
 fi
 

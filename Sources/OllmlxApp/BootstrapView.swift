@@ -80,6 +80,7 @@ struct BootstrapView: View {
         }
         .padding(30)
         .frame(width: 420)
+        .frame(minHeight: 250)
         .onAppear {
             runBootstrap()
         }

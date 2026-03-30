@@ -4,14 +4,14 @@ import OllmlxCore
 
 extension Notification.Name {
     static let openSettings = Notification.Name("com.ollmlx.openSettings")
+    static let openPullModel = Notification.Name("com.ollmlx.openPullModel")
 }
 
 struct MenuBarView: View {
     @EnvironmentObject var serverManager: ServerManager
     var updater: SPUUpdater?
     @State private var cachedModels: [LocalModel] = []
-    @State private var showPullSheet = false
-    // Settings opened via AppDelegate as standalone NSWindow (not a sheet — sheets on popovers deadlock)
+    // Pull model and settings opened via AppDelegate as standalone NSWindow (not a sheet — sheets on popovers deadlock)
 
     @State private var selectedModel: String = ""
     @State private var isSwitchingModel = false
@@ -31,9 +31,9 @@ struct MenuBarView: View {
 
             Divider()
 
-            // Pull model
+            // Pull model — opens as standalone NSWindow via AppDelegate
             Button("Pull Model...") {
-                showPullSheet = true
+                NotificationCenter.default.post(name: .openPullModel, object: nil)
             }
 
             Divider()
@@ -69,7 +69,7 @@ struct MenuBarView: View {
             }
         }
         .padding(12)
-        .frame(width: 296)
+        .frame(width: 280)
         .task {
             refreshModels()
         }
@@ -81,11 +81,6 @@ struct MenuBarView: View {
                     selectedModel = model
                 }
             }
-        }
-        .sheet(isPresented: $showPullSheet) {
-            ModelListView(isPresented: $showPullSheet, onComplete: {
-                refreshModels()
-            })
         }
     }
 

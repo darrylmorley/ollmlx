@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var popover: NSPopover!
     private var bootstrapWindow: NSWindow?
     private var settingsWindow: NSWindow?
+    private var pullModelWindow: NSWindow?
     private var cancellables = Set<AnyCancellable>()
     let updaterController: SPUStandardUpdaterController
 
@@ -42,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Create the popover with MenuBarView
         popover = NSPopover()
-        popover.contentSize = NSSize(width: 320, height: 400)
+        popover.contentSize = NSSize(width: 280, height: 380)
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(
             rootView: MenuBarView(updater: updaterController.updater)
@@ -77,6 +78,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self,
             selector: #selector(openSettingsWindow),
             name: .openSettings,
+            object: nil
+        )
+
+        // Listen for pull model window requests from MenuBarView
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(openPullModelWindow),
+            name: .openPullModel,
             object: nil
         )
 
@@ -163,6 +172,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.makeKeyAndOrderFront(nil)
         NSApplication.shared.activate(ignoringOtherApps: true)
         settingsWindow = window
+    }
+
+    // MARK: - Pull Model Window
+
+    @MainActor @objc private func openPullModelWindow() {
+        // Close the popover first
+        popover.performClose(nil)
+
+        // If pull window already open, just bring it to front
+        if let existing = pullModelWindow, existing.isVisible {
+            existing.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let view = ModelListView(onComplete: {})
+        let hostingController = NSHostingController(rootView: view)
+        let window = NSWindow(contentViewController: hostingController)
+        window.title = "Pull Model"
+        window.styleMask = [.titled, .closable]
+        window.setContentSize(NSSize(width: 420, height: 200))
+        window.center()
+        window.isReleasedWhenClosed = false
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        pullModelWindow = window
     }
 
     // MARK: - Bootstrap

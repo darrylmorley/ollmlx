@@ -100,6 +100,7 @@ struct CLIInstallView: View {
         }
         .padding(30)
         .frame(width: 400)
+        .frame(minHeight: 220)
         .interactiveDismissDisabled(status == .installing)
     }
 
