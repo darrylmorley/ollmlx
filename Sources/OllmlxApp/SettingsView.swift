@@ -28,6 +28,9 @@ struct SettingsView: View {
     @State private var ollamaShimWarning: String?
     @State private var apiKeySaveError: String?
     @State private var showAPIKey = false
+    @State private var hfTokenText: String = ""
+    @State private var showHFToken = false
+    @State private var hfTokenSaveError: String?
 
     private let config = OllmlxConfig.shared
     private let ollamaShimPath = "/usr/local/bin/ollama"
@@ -43,6 +46,8 @@ struct SettingsView: View {
                     pythonSection
                     Divider()
                     securitySection
+                    Divider()
+                    downloadsSection
                     Divider()
                     behaviourSection
                     Divider()
@@ -264,6 +269,49 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Downloads Section
+
+    private var downloadsSection: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Downloads")
+                .font(.headline)
+
+            HStack {
+                Text("HuggingFace token")
+                    .frame(width: 140, alignment: .leading)
+                if showHFToken {
+                    TextField("Optional — enables faster downloads", text: $hfTokenText)
+                        .textFieldStyle(.roundedBorder)
+                } else {
+                    SecureField("Optional — enables faster downloads", text: $hfTokenText)
+                        .textFieldStyle(.roundedBorder)
+                }
+                Button(action: { showHFToken.toggle() }) {
+                    Image(systemName: showHFToken ? "eye.slash" : "eye")
+                }
+                .buttonStyle(.borderless)
+                .help(showHFToken ? "Hide token" : "Show token")
+                Button("Save") {
+                    saveHFToken()
+                }
+                Button("Clear") {
+                    clearHFToken()
+                }
+            }
+
+            if let error = hfTokenSaveError {
+                Text(error)
+                    .font(.caption)
+                    .foregroundColor(.red)
+            }
+
+            Text("Get a free token at huggingface.co/settings/tokens")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.leading, 140)
+        }
+    }
+
     // MARK: - Behaviour Section
 
     private var behaviourSection: some View {
@@ -340,6 +388,11 @@ struct SettingsView: View {
             apiKeyText = key
         }
 
+        // Load HF token
+        if let token = Keychain.getHFToken(), !token.isEmpty {
+            hfTokenText = token
+        }
+
         // Check Ollama shim state
         checkOllamaShim()
 
@@ -372,6 +425,26 @@ struct SettingsView: View {
             }
         } catch {
             apiKeySaveError = "Failed to clear API key: \(error.localizedDescription)"
+        }
+    }
+
+    private func saveHFToken() {
+        hfTokenSaveError = nil
+        let token = hfTokenText.trimmingCharacters(in: .whitespaces)
+        do {
+            try Keychain.setHFToken(token.isEmpty ? nil : token)
+        } catch {
+            hfTokenSaveError = "Failed to save token: \(error.localizedDescription)"
+        }
+    }
+
+    private func clearHFToken() {
+        hfTokenSaveError = nil
+        do {
+            try Keychain.setHFToken(nil)
+            hfTokenText = ""
+        } catch {
+            hfTokenSaveError = "Failed to clear token: \(error.localizedDescription)"
         }
     }
 

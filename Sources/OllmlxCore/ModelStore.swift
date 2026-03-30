@@ -129,6 +129,13 @@ public final class ModelStore: Sendable {
                     process.executableURL = URL(fileURLWithPath: hfCLI)
                     process.arguments = ["download", "--resume-download", model]
 
+                    // Pass HF token as environment variable for authenticated downloads
+                    if let hfToken = Keychain.getHFToken(), !hfToken.isEmpty {
+                        var env = ProcessInfo.processInfo.environment
+                        env["HF_TOKEN"] = hfToken
+                        process.environment = env
+                    }
+
                     let stderrPipe = Pipe()
                     process.standardError = stderrPipe
                     process.standardOutput = FileHandle.nullDevice

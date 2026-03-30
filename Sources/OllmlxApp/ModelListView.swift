@@ -24,6 +24,12 @@ struct ModelListView: View {
                 .textFieldStyle(.roundedBorder)
                 .disabled(isPulling)
 
+            if !isPulling && Keychain.getHFToken() == nil {
+                Text("Add a HuggingFace token in Settings for faster downloads")
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+
             if isPulling {
                 VStack(spacing: 8) {
                     ProgressView(value: progress)
