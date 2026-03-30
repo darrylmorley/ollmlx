@@ -275,34 +275,14 @@ public final class ProxyServer: Sendable {
         return jsonOK(String(data: data, encoding: .utf8) ?? "{}")
     }
 
+    /// Shared coordinator that serializes model switches across concurrent requests.
+    private static let switchCoordinator = ModelSwitchCoordinator()
+
     /// Ensure the requested model is running, switching if necessary.
     /// Returns the upstream port to use, or nil if the model can't be started.
-    private static func ensureModel(_ requestedModel: String, upstream: UpstreamState, logger: OllmlxLogger) async throws -> Int? {
-        guard !requestedModel.isEmpty else { return await upstream.port }
-
-        // Check current state on the main actor
-        let currentModel: String? = await MainActor.run {
-            if case .running(let model, _) = ServerManager.shared.state {
-                return model
-            }
-            return nil
-        }
-
-        // If already running the requested model, return current port
-        if let current = currentModel, current == requestedModel {
-            return await upstream.port
-        }
-
-        // Model switch needed — stop current, start requested
-        logger.info("Model switch requested: \(currentModel ?? "none") → \(requestedModel)")
-
+    private static func ensureModel(_ requestedModel: String, upstream: UpstreamState, logger: OllmlxLogger) async -> Int? {
         do {
-            // ServerManager methods are @MainActor — await hops to main actor automatically
-            await ServerManager.shared.stop()
-            try await ServerManager.shared.start(model: requestedModel)
-
-            // After start, the upstream port is set by ServerManager
-            return await upstream.port
+            return try await switchCoordinator.ensureModel(requestedModel, upstream: upstream, logger: logger)
         } catch {
             logger.error("Model switch failed: \(error)")
             return nil
@@ -327,7 +307,7 @@ public final class ProxyServer: Sendable {
         let stream = ollamaReq["stream"] as? Bool ?? true
 
         // Ensure the requested model is running (switch if needed)
-        guard let port = try await ensureModel(model, upstream: upstream, logger: logger) else {
+        guard let port = await ensureModel(model, upstream: upstream, logger: logger) else {
             return errorResponse(status: .serviceUnavailable, message: "Failed to start model: \(model)")
         }
 
@@ -476,7 +456,7 @@ public final class ProxyServer: Sendable {
         let stream = ollamaReq["stream"] as? Bool ?? true
 
         // Ensure the requested model is running (switch if needed)
-        guard let port = try await ensureModel(model, upstream: upstream, logger: logger) else {
+        guard let port = await ensureModel(model, upstream: upstream, logger: logger) else {
             return errorResponse(status: .serviceUnavailable, message: "Failed to start model: \(model)")
         }
 
@@ -637,5 +617,96 @@ actor UpstreamState {
 
     func clear() {
         self.port = nil
+    }
+}
+
+// MARK: - ModelSwitchCoordinator
+
+/// Serializes model switches so that concurrent API requests cannot trigger
+/// simultaneous stop/start cycles that kill processes mid-startup.
+///
+/// - Same-model requests coalesce: if a switch to model X is in progress,
+///   new requests for X await the existing switch instead of starting another.
+/// - Different-model requests cancel: if a switch to X is in progress and a
+///   request for Y arrives, X is cancelled and Y starts (last writer wins).
+/// - The `while true` loop re-evaluates after every `await` suspension point
+///   to handle actor reentrancy correctly.
+actor ModelSwitchCoordinator {
+    private var currentSwitch: (model: String, task: Task<Int?, any Error>)?
+
+    func ensureModel(
+        _ requestedModel: String,
+        upstream: UpstreamState,
+        logger: OllmlxLogger
+    ) async throws -> Int? {
+        guard !requestedModel.isEmpty else { return await upstream.port }
+
+        // Loop handles actor reentrancy — after any await, state may have
+        // changed due to other callers entering while we were suspended.
+        while true {
+            // Fast path: already running the requested model
+            if await isRunning(model: requestedModel) {
+                return await upstream.port
+            }
+
+            // A switch is already in progress
+            if let existing = currentSwitch {
+                if existing.model == requestedModel {
+                    // Same model — coalesce by joining the in-flight task
+                    logger.info("Coalescing request for \(requestedModel) with in-progress switch")
+                    return try await existing.task.value
+                }
+                // Different model — cancel current switch (last writer wins)
+                logger.info("Cancelling switch to \(existing.model) in favor of \(requestedModel)")
+                existing.task.cancel()
+                _ = try? await existing.task.value
+                // After cancel completes, loop back to re-evaluate — another
+                // caller may have started a new switch during the await.
+                continue
+            }
+
+            // No switch in progress — start one
+            let task = Task<Int?, any Error> {
+                let prev = await MainActor.run { () -> String? in
+                    if case .running(let m, _) = ServerManager.shared.state { return m }
+                    return nil
+                }
+                logger.info("Model switch: \(prev ?? "none") → \(requestedModel)")
+                await ServerManager.shared.stop()
+                try Task.checkCancellation()
+                try await ServerManager.shared.start(model: requestedModel)
+                return await upstream.port
+            }
+            currentSwitch = (model: requestedModel, task: task)
+
+            do {
+                let port = try await task.value
+                clearIfCurrent(requestedModel)
+                return port
+            } catch is CancellationError {
+                clearIfCurrent(requestedModel)
+                // Our switch was superseded by a newer request — report failure.
+                // The client gets 503 and can retry; the winning switch proceeds.
+                return nil
+            } catch {
+                clearIfCurrent(requestedModel)
+                throw error
+            }
+        }
+    }
+
+    private func clearIfCurrent(_ model: String) {
+        if currentSwitch?.model == model {
+            currentSwitch = nil
+        }
+    }
+
+    private func isRunning(model: String) async -> Bool {
+        await MainActor.run {
+            if case .running(let m, _) = ServerManager.shared.state {
+                return m == model
+            }
+            return false
+        }
     }
 }

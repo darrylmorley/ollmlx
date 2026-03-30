@@ -121,6 +121,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - `ProxyServer` must return `503 Service Unavailable` (not hang) when no upstream is set
 - Streaming responses (`text/event-stream`) must be forwarded chunk-by-chunk — no full response buffering
 - `setUpstream(port:)` must be atomic — use a lock or actor to prevent races between old and new upstream
+- Model switches are serialized by `ModelSwitchCoordinator` (actor) — concurrent API requests must never trigger parallel stop/start cycles
 - **URLSession lifecycle**: For streaming responses, `session.invalidateAndCancel()` must be called inside the `ResponseBody` closure (via `defer`), **not** on the outer function scope — the function returns the `Response` before the body closure executes, so a `defer` on the outer scope kills the session mid-stream
 
 ### Ollama compatibility layer
@@ -129,7 +130,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - `/api/tags` reads from `ModelStore.refreshCached()` — does not need an upstream; `/api/version` is unauthenticated
 - `/api/chat` and `/api/generate` translate Ollama request/response format to/from OpenAI `/v1/chat/completions` — both streaming (ndjson) and non-streaming
 - `/api/chat` and `/api/generate` call `ensureModel()` before forwarding — if the requested model differs from the running model, it stops the current model and starts the requested one via `ServerManager`
-- `ensureModel()` reads `ServerManager.shared.state` via `MainActor.run {}` (synchronous check) then calls `stop()`/`start()` directly (which hop to main actor automatically since `ServerManager` is `@MainActor`)
+- `ensureModel()` delegates to `ModelSwitchCoordinator` (actor) which serializes all switch operations: same-model requests coalesce onto the in-flight task; different-model requests cancel the current switch (last writer wins). A `while true` loop re-evaluates state after every `await` to handle actor reentrancy safely
 - **Do not use `MainActor.run` with async closures** — it only accepts synchronous closures. Call `@MainActor` async methods directly with `await` from nonisolated contexts
 - Ollama streaming responses use `application/x-ndjson` content type (one JSON object per line), not SSE
 
@@ -204,6 +205,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - Do not put `defer { session.invalidateAndCancel() }` on the outer scope of proxy handlers that return streaming `ResponseBody` closures
 - Do not use `.sheet()` to present views from an NSPopover — it deadlocks the app
 - Do not call `ServerManager.start()` from model selector onChange — only from explicit Start button or Ollama API model-switch logic
+- Do not call `ServerManager.stop()`/`start()` directly from proxy route handlers — always go through `ModelSwitchCoordinator.ensureModel()` to prevent concurrent model-switch race conditions
 - Do not use `/usr/bin/env` to find tools like `uv` from the macOS app — resolve absolute paths
 - Do not send SIGKILL without trying SIGINT first and waiting 5 seconds
 - Do not allow external connections without an API key being set
