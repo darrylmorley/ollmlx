@@ -73,6 +73,15 @@ struct MenuBarView: View {
         .task {
             refreshModels()
         }
+        .onChange(of: serverManager.state) { newState in
+            // Sync the dropdown selection when the running model changes
+            // (e.g. triggered externally via /api/chat or CLI)
+            if case .running(let model, _) = newState {
+                if selectedModel != model {
+                    selectedModel = model
+                }
+            }
+        }
         .sheet(isPresented: $showPullSheet) {
             ModelListView(isPresented: $showPullSheet, onComplete: {
                 refreshModels()

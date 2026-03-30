@@ -48,6 +48,27 @@ public final class ProxyServer: Sendable {
         let upstreamState = self.upstream
         let config = self.config
         let logger = self.logger
+        let modelStore = ModelStore.shared
+
+        // Ollama-compatible API endpoints (registered before catch-all)
+        router.get("api/tags") { request, context -> Response in
+            if let authErr = Self.checkAPIKey(request: request, config: config) { return authErr }
+            return Self.handleTags(modelStore: modelStore)
+        }
+
+        router.get("api/version") { request, context -> Response in
+            Self.jsonOK(#"{"version":"0.1.0"}"#)
+        }
+
+        router.post("api/chat") { request, context -> Response in
+            if let authErr = Self.checkAPIKey(request: request, config: config) { return authErr }
+            return try await Self.handleOllamaChat(request: request, context: context, upstream: upstreamState, logger: logger)
+        }
+
+        router.post("api/generate") { request, context -> Response in
+            if let authErr = Self.checkAPIKey(request: request, config: config) { return authErr }
+            return try await Self.handleOllamaGenerate(request: request, context: context, upstream: upstreamState, logger: logger)
+        }
 
         // Catch-all: forward every request to the upstream
         router.on("**", method: .get) { request, context in
@@ -201,6 +222,394 @@ public final class ProxyServer: Sendable {
                 body: .init(byteBuffer: ByteBuffer(data: responseData))
             )
         }
+    }
+
+    // MARK: - Ollama API Compatibility
+
+    /// Check API key, returning an error Response if invalid, or nil if OK.
+    private static func checkAPIKey(request: Request, config: OllmlxConfig) -> Response? {
+        guard let expectedKey = config.apiKey, !expectedKey.isEmpty else { return nil }
+        let authHeader = request.headers[.authorization]
+        let expected = "Bearer \(expectedKey)"
+        guard authHeader == expected else {
+            return errorResponse(status: .unauthorized, message: "Invalid or missing API key")
+        }
+        return nil
+    }
+
+    /// GET /api/tags — return cached models in Ollama format.
+    private static func handleTags(modelStore: ModelStore) -> Response {
+        let models = modelStore.refreshCached()
+        let ollamaModels = models.map { model -> [String: Any] in
+            let formatter = ISO8601DateFormatter()
+            var details: [String: Any] = ["format": "mlx"]
+
+            // Extract family from repo name (e.g., "Llama" from "mlx-community/Llama-3.2-3B-Instruct-4bit")
+            let namePart = model.repoID.split(separator: "/").last.map(String.init) ?? model.repoID
+            let family = namePart.split(separator: "-").first.map { String($0).lowercased() } ?? "unknown"
+            details["family"] = family
+
+            // Extract parameter size from name (e.g., "3B")
+            if let range = namePart.range(of: #"\d+(\.\d+)?[BbMm]"#, options: .regularExpression) {
+                details["parameter_size"] = String(namePart[range])
+            }
+
+            if let q = model.quantisation {
+                details["quantization_level"] = q
+            }
+
+            return [
+                "name": model.repoID,
+                "model": model.repoID,
+                "modified_at": formatter.string(from: model.modifiedAt),
+                "size": model.diskSize,
+                "digest": "",
+                "details": details,
+            ]
+        }
+
+        let result: [String: Any] = ["models": ollamaModels]
+        guard let data = try? JSONSerialization.data(withJSONObject: result) else {
+            return errorResponse(status: .internalServerError, message: "Failed to encode models")
+        }
+        return jsonOK(String(data: data, encoding: .utf8) ?? "{}")
+    }
+
+    /// Ensure the requested model is running, switching if necessary.
+    /// Returns the upstream port to use, or nil if the model can't be started.
+    private static func ensureModel(_ requestedModel: String, upstream: UpstreamState, logger: OllmlxLogger) async throws -> Int? {
+        guard !requestedModel.isEmpty else { return await upstream.port }
+
+        // Check current state on the main actor
+        let currentModel: String? = await MainActor.run {
+            if case .running(let model, _) = ServerManager.shared.state {
+                return model
+            }
+            return nil
+        }
+
+        // If already running the requested model, return current port
+        if let current = currentModel, current == requestedModel {
+            return await upstream.port
+        }
+
+        // Model switch needed — stop current, start requested
+        logger.info("Model switch requested: \(currentModel ?? "none") → \(requestedModel)")
+
+        do {
+            // ServerManager methods are @MainActor — await hops to main actor automatically
+            await ServerManager.shared.stop()
+            try await ServerManager.shared.start(model: requestedModel)
+
+            // After start, the upstream port is set by ServerManager
+            return await upstream.port
+        } catch {
+            logger.error("Model switch failed: \(error)")
+            return nil
+        }
+    }
+
+    /// POST /api/chat — translate Ollama chat request to OpenAI format, proxy, translate back.
+    private static func handleOllamaChat(
+        request: Request,
+        context: some RequestContext,
+        upstream: UpstreamState,
+        logger: OllmlxLogger
+    ) async throws -> Response {
+        let bodyData = try await request.body.collect(upTo: context.maxUploadSize)
+        guard bodyData.readableBytes > 0,
+              let ollamaReq = try? JSONSerialization.jsonObject(with: Data(buffer: bodyData)) as? [String: Any] else {
+            return errorResponse(status: .badRequest, message: "Invalid JSON body")
+        }
+
+        let model = ollamaReq["model"] as? String ?? ""
+        let messages = ollamaReq["messages"] as? [[String: Any]] ?? []
+        let stream = ollamaReq["stream"] as? Bool ?? true
+
+        // Ensure the requested model is running (switch if needed)
+        guard let port = try await ensureModel(model, upstream: upstream, logger: logger) else {
+            return errorResponse(status: .serviceUnavailable, message: "Failed to start model: \(model)")
+        }
+
+        // Build OpenAI request
+        var openAIReq: [String: Any] = [
+            "model": model,
+            "messages": messages,
+            "stream": stream,
+        ]
+        if let options = ollamaReq["options"] as? [String: Any] {
+            if let temp = options["temperature"] { openAIReq["temperature"] = temp }
+            if let topP = options["top_p"] { openAIReq["top_p"] = topP }
+            if let maxTokens = options["num_predict"] { openAIReq["max_tokens"] = maxTokens }
+        }
+
+        let openAIBody = try JSONSerialization.data(withJSONObject: openAIReq)
+
+        var urlRequest = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = openAIBody
+
+        let session = URLSession(configuration: .ephemeral)
+
+        if stream {
+            let (asyncBytes, urlResponse) = try await session.bytes(for: urlRequest)
+            guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                session.invalidateAndCancel()
+                return errorResponse(status: .badGateway, message: "Invalid response from upstream")
+            }
+
+            if httpResponse.statusCode != 200 {
+                defer { session.invalidateAndCancel() }
+                var data = Data()
+                for try await byte in asyncBytes { data.append(byte) }
+                return errorResponse(
+                    status: HTTPResponse.Status(code: httpResponse.statusCode),
+                    message: String(data: data, encoding: .utf8) ?? "Upstream error"
+                )
+            }
+
+            var responseHeaders = HTTPFields()
+            responseHeaders[.contentType] = "application/x-ndjson"
+
+            return Response(
+                status: .ok,
+                headers: responseHeaders,
+                body: ResponseBody { writer in
+                    defer { session.invalidateAndCancel() }
+                    var lineBuffer = Data()
+                    for try await byte in asyncBytes {
+                        lineBuffer.append(byte)
+                        guard byte == UInt8(ascii: "\n") else { continue }
+                        guard let line = String(data: lineBuffer, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              line.hasPrefix("data: ") else {
+                            lineBuffer.removeAll(keepingCapacity: true)
+                            continue
+                        }
+                        let payload = String(line.dropFirst(6))
+                        lineBuffer.removeAll(keepingCapacity: true)
+
+                        if payload == "[DONE]" {
+                            // Final message
+                            let done: [String: Any] = [
+                                "model": model,
+                                "created_at": ISO8601DateFormatter().string(from: Date()),
+                                "message": ["role": "assistant", "content": ""],
+                                "done": true,
+                            ]
+                            if let data = try? JSONSerialization.data(withJSONObject: done) {
+                                try await writer.write(ByteBuffer(data: data + Data("\n".utf8)))
+                            }
+                            break
+                        }
+
+                        guard let chunkData = payload.data(using: .utf8),
+                              let chunk = try? JSONSerialization.jsonObject(with: chunkData) as? [String: Any],
+                              let choices = chunk["choices"] as? [[String: Any]],
+                              let first = choices.first,
+                              let delta = first["delta"] as? [String: Any] else { continue }
+
+                        let content = delta["content"] as? String ?? ""
+                        let ollamaChunk: [String: Any] = [
+                            "model": model,
+                            "created_at": ISO8601DateFormatter().string(from: Date()),
+                            "message": ["role": "assistant", "content": content],
+                            "done": false,
+                        ]
+                        if let data = try? JSONSerialization.data(withJSONObject: ollamaChunk) {
+                            try await writer.write(ByteBuffer(data: data + Data("\n".utf8)))
+                        }
+                    }
+                    try await writer.finish(nil)
+                }
+            )
+        } else {
+            // Non-streaming
+            defer { session.invalidateAndCancel() }
+            let (data, urlResponse) = try await session.data(for: urlRequest)
+            guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                return errorResponse(status: .badGateway, message: "Invalid response from upstream")
+            }
+
+            if httpResponse.statusCode != 200 {
+                return errorResponse(
+                    status: HTTPResponse.Status(code: httpResponse.statusCode),
+                    message: String(data: data, encoding: .utf8) ?? "Upstream error"
+                )
+            }
+
+            guard let openAIResp = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = openAIResp["choices"] as? [[String: Any]],
+                  let first = choices.first,
+                  let message = first["message"] as? [String: Any] else {
+                return errorResponse(status: .badGateway, message: "Unexpected upstream response format")
+            }
+
+            let ollamaResp: [String: Any] = [
+                "model": model,
+                "created_at": ISO8601DateFormatter().string(from: Date()),
+                "message": message,
+                "done": true,
+            ]
+            guard let respData = try? JSONSerialization.data(withJSONObject: ollamaResp) else {
+                return errorResponse(status: .internalServerError, message: "Failed to encode response")
+            }
+            return jsonOK(String(data: respData, encoding: .utf8) ?? "{}")
+        }
+    }
+
+    /// POST /api/generate — translate Ollama generate request to OpenAI completions format.
+    private static func handleOllamaGenerate(
+        request: Request,
+        context: some RequestContext,
+        upstream: UpstreamState,
+        logger: OllmlxLogger
+    ) async throws -> Response {
+        let bodyData = try await request.body.collect(upTo: context.maxUploadSize)
+        guard bodyData.readableBytes > 0,
+              let ollamaReq = try? JSONSerialization.jsonObject(with: Data(buffer: bodyData)) as? [String: Any] else {
+            return errorResponse(status: .badRequest, message: "Invalid JSON body")
+        }
+
+        let model = ollamaReq["model"] as? String ?? ""
+        let prompt = ollamaReq["prompt"] as? String ?? ""
+        let stream = ollamaReq["stream"] as? Bool ?? true
+
+        // Ensure the requested model is running (switch if needed)
+        guard let port = try await ensureModel(model, upstream: upstream, logger: logger) else {
+            return errorResponse(status: .serviceUnavailable, message: "Failed to start model: \(model)")
+        }
+
+        // mlx_lm.server supports /v1/chat/completions — use that with a single user message
+        var openAIReq: [String: Any] = [
+            "model": model,
+            "messages": [["role": "user", "content": prompt]],
+            "stream": stream,
+        ]
+        if let options = ollamaReq["options"] as? [String: Any] {
+            if let temp = options["temperature"] { openAIReq["temperature"] = temp }
+            if let topP = options["top_p"] { openAIReq["top_p"] = topP }
+            if let maxTokens = options["num_predict"] { openAIReq["max_tokens"] = maxTokens }
+        }
+
+        let openAIBody = try JSONSerialization.data(withJSONObject: openAIReq)
+
+        var urlRequest = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = openAIBody
+
+        let session = URLSession(configuration: .ephemeral)
+
+        if stream {
+            let (asyncBytes, urlResponse) = try await session.bytes(for: urlRequest)
+            guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                session.invalidateAndCancel()
+                return errorResponse(status: .badGateway, message: "Invalid response from upstream")
+            }
+
+            if httpResponse.statusCode != 200 {
+                defer { session.invalidateAndCancel() }
+                var data = Data()
+                for try await byte in asyncBytes { data.append(byte) }
+                return errorResponse(
+                    status: HTTPResponse.Status(code: httpResponse.statusCode),
+                    message: String(data: data, encoding: .utf8) ?? "Upstream error"
+                )
+            }
+
+            var responseHeaders = HTTPFields()
+            responseHeaders[.contentType] = "application/x-ndjson"
+
+            return Response(
+                status: .ok,
+                headers: responseHeaders,
+                body: ResponseBody { writer in
+                    defer { session.invalidateAndCancel() }
+                    var lineBuffer = Data()
+                    for try await byte in asyncBytes {
+                        lineBuffer.append(byte)
+                        guard byte == UInt8(ascii: "\n") else { continue }
+                        guard let line = String(data: lineBuffer, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                              line.hasPrefix("data: ") else {
+                            lineBuffer.removeAll(keepingCapacity: true)
+                            continue
+                        }
+                        let payload = String(line.dropFirst(6))
+                        lineBuffer.removeAll(keepingCapacity: true)
+
+                        if payload == "[DONE]" {
+                            let done: [String: Any] = [
+                                "model": model,
+                                "created_at": ISO8601DateFormatter().string(from: Date()),
+                                "response": "",
+                                "done": true,
+                            ]
+                            if let data = try? JSONSerialization.data(withJSONObject: done) {
+                                try await writer.write(ByteBuffer(data: data + Data("\n".utf8)))
+                            }
+                            break
+                        }
+
+                        guard let chunkData = payload.data(using: .utf8),
+                              let chunk = try? JSONSerialization.jsonObject(with: chunkData) as? [String: Any],
+                              let choices = chunk["choices"] as? [[String: Any]],
+                              let first = choices.first,
+                              let delta = first["delta"] as? [String: Any] else { continue }
+
+                        let content = delta["content"] as? String ?? ""
+                        let ollamaChunk: [String: Any] = [
+                            "model": model,
+                            "created_at": ISO8601DateFormatter().string(from: Date()),
+                            "response": content,
+                            "done": false,
+                        ]
+                        if let data = try? JSONSerialization.data(withJSONObject: ollamaChunk) {
+                            try await writer.write(ByteBuffer(data: data + Data("\n".utf8)))
+                        }
+                    }
+                    try await writer.finish(nil)
+                }
+            )
+        } else {
+            defer { session.invalidateAndCancel() }
+            let (data, urlResponse) = try await session.data(for: urlRequest)
+            guard let httpResponse = urlResponse as? HTTPURLResponse else {
+                return errorResponse(status: .badGateway, message: "Invalid response from upstream")
+            }
+
+            if httpResponse.statusCode != 200 {
+                return errorResponse(
+                    status: HTTPResponse.Status(code: httpResponse.statusCode),
+                    message: String(data: data, encoding: .utf8) ?? "Upstream error"
+                )
+            }
+
+            guard let openAIResp = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let choices = openAIResp["choices"] as? [[String: Any]],
+                  let first = choices.first,
+                  let message = first["message"] as? [String: Any] else {
+                return errorResponse(status: .badGateway, message: "Unexpected upstream response format")
+            }
+
+            let content = message["content"] as? String ?? ""
+            let ollamaResp: [String: Any] = [
+                "model": model,
+                "created_at": ISO8601DateFormatter().string(from: Date()),
+                "response": content,
+                "done": true,
+            ]
+            guard let respData = try? JSONSerialization.data(withJSONObject: ollamaResp) else {
+                return errorResponse(status: .internalServerError, message: "Failed to encode response")
+            }
+            return jsonOK(String(data: respData, encoding: .utf8) ?? "{}")
+        }
+    }
+
+    private static func jsonOK(_ json: String) -> Response {
+        var headers = HTTPFields()
+        headers[.contentType] = "application/json"
+        return Response(status: .ok, headers: headers, body: .init(byteBuffer: ByteBuffer(string: json)))
     }
 
     private static func errorResponse(status: HTTPResponse.Status, message: String) -> Response {

@@ -212,4 +212,138 @@ final class ProxyServerTests: XCTestCase {
             }
         }
     }
+
+    // MARK: - Ollama API Compatibility
+
+    func testApiTagsReturnsOllamaFormat() async throws {
+        let proxy = ProxyServer()
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/api/tags", method: .get) { response in
+                XCTAssertEqual(response.status, .ok)
+                let contentType = response.headers[.contentType]
+                XCTAssertEqual(contentType, "application/json")
+
+                let data = Data(buffer: response.body)
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                XCTAssertNotNil(json?["models"], "/api/tags must have a 'models' key")
+
+                let models = json?["models"] as? [[String: Any]]
+                XCTAssertNotNil(models, "'models' should be an array")
+
+                // Each model should have the required Ollama fields
+                if let first = models?.first {
+                    XCTAssertNotNil(first["name"], "Model must have 'name'")
+                    XCTAssertNotNil(first["model"], "Model must have 'model'")
+                    XCTAssertNotNil(first["modified_at"], "Model must have 'modified_at'")
+                    XCTAssertNotNil(first["size"], "Model must have 'size'")
+                    XCTAssertNotNil(first["details"], "Model must have 'details'")
+                }
+            }
+        }
+    }
+
+    func testApiVersionReturnsVersion() async throws {
+        let proxy = ProxyServer()
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/api/version", method: .get) { response in
+                XCTAssertEqual(response.status, .ok)
+
+                let data = Data(buffer: response.body)
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                XCTAssertEqual(json?["version"] as? String, "0.1.0")
+            }
+        }
+    }
+
+    func testApiChatReturns503WhenNoUpstream() async throws {
+        let proxy = ProxyServer()
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            let body = ByteBuffer(string: #"{"model":"test","messages":[{"role":"user","content":"hi"}]}"#)
+            try await client.execute(uri: "/api/chat", method: .post, body: body) { response in
+                XCTAssertEqual(response.status, .serviceUnavailable)
+            }
+        }
+    }
+
+    func testApiGenerateReturns503WhenNoUpstream() async throws {
+        let proxy = ProxyServer()
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            let body = ByteBuffer(string: #"{"model":"test","prompt":"hello"}"#)
+            try await client.execute(uri: "/api/generate", method: .post, body: body) { response in
+                XCTAssertEqual(response.status, .serviceUnavailable)
+            }
+        }
+    }
+
+    func testApiChatReturns401WhenAPIKeyRequired() async throws {
+        try Keychain.setAPIKey("secret-key")
+        let proxy = ProxyServer()
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            let body = ByteBuffer(string: #"{"model":"test","messages":[]}"#)
+            try await client.execute(uri: "/api/chat", method: .post, body: body) { response in
+                XCTAssertEqual(response.status, .unauthorized)
+            }
+        }
+    }
+
+    func testApiTagsReturns401WhenAPIKeyRequired() async throws {
+        try Keychain.setAPIKey("secret-key")
+        let proxy = ProxyServer()
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/api/tags", method: .get) { response in
+                XCTAssertEqual(response.status, .unauthorized)
+            }
+        }
+    }
+
+    func testApiVersionDoesNotRequireAuth() async throws {
+        try Keychain.setAPIKey("secret-key")
+        let proxy = ProxyServer()
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            try await client.execute(uri: "/api/version", method: .get) { response in
+                // /api/version should be accessible without auth
+                XCTAssertEqual(response.status, .ok)
+            }
+        }
+    }
+
+    func testApiChatRejectsBadJSON() async throws {
+        let proxy = ProxyServer()
+        await proxy.setUpstream(port: 99999) // Set upstream to avoid 503
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            let body = ByteBuffer(string: "not json")
+            try await client.execute(uri: "/api/chat", method: .post, body: body) { response in
+                XCTAssertEqual(response.status, .badRequest)
+            }
+        }
+    }
+
+    func testApiGenerateRejectsBadJSON() async throws {
+        let proxy = ProxyServer()
+        await proxy.setUpstream(port: 99999)
+        let app = proxy.buildApplication()
+
+        try await app.test(.router) { client in
+            let body = ByteBuffer(string: "not json")
+            try await client.execute(uri: "/api/generate", method: .post, body: body) { response in
+                XCTAssertEqual(response.status, .badRequest)
+            }
+        }
+    }
 }

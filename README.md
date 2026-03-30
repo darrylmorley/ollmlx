@@ -1,6 +1,6 @@
 # ollmlx
 
-Run local LLMs on Apple Silicon via [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms/mlx_lm). Menubar app + CLI with an OpenAI-compatible API on `localhost:11434`.
+Run local LLMs on Apple Silicon via [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms/mlx_lm). Menubar app + CLI with OpenAI-compatible and Ollama-compatible APIs on `localhost:11434`.
 
 ## Requirements
 
@@ -89,12 +89,14 @@ ollmlx ps
 
 ## Ollama migration
 
-ollmlx exposes an OpenAI-compatible API on the same default port as Ollama (`localhost:11434`). Any tool or client that works with Ollama's API should work with ollmlx without reconfiguration.
+ollmlx exposes both OpenAI-compatible (`/v1/chat/completions`, `/v1/models`) and Ollama-compatible (`/api/tags`, `/api/chat`, `/api/generate`) endpoints on the same default port as Ollama (`localhost:11434`). Any tool or client that works with Ollama should work with ollmlx without reconfiguration.
+
+If an Ollama client requests a different model than the one currently running, ollmlx will automatically stop the current model and start the requested one.
 
 > **Important:** Ollama and ollmlx both use port `11434`. Quit Ollama before launching ollmlx, or change one of the ports in Settings.
 
+- **Open WebUI** — set the Ollama URL to `http://localhost:11434`. Model list and chat work natively via the Ollama API
 - **Continue, Cursor, or other IDE plugins** — point them at `http://localhost:11434` (usually the default)
-- **Open WebUI** — set the Ollama URL to `http://localhost:11434`
 - **Python/JS clients** — any OpenAI-compatible client library works, just set the base URL to `http://localhost:11434/v1`
 
 ### Optional Ollama CLI shim
@@ -140,13 +142,13 @@ Sources/
 
 | Port | Purpose |
 |---|---|
-| 11434 | Public OpenAI-compatible API (clients connect here) |
+| 11434 | Public OpenAI-compatible + Ollama-compatible API (clients connect here) |
 | 11435 | Internal control API (CLI and app only) |
 | Ephemeral | mlx_lm.server internal port (allocated dynamically) |
 
 ## Known limitations
 
-- **One model at a time** — v1 supports running a single model. Switching models stops the current one first.
+- **One model at a time** — v1 supports running a single model. Switching models stops the current one first. External clients (e.g. Open WebUI) can trigger model switches automatically via `/api/chat` or `/api/generate`.
 - **Mac App Store not supported** — ollmlx requires `com.apple.security.cs.allow-unsigned-executable-memory` to spawn the Python/MLX process and `com.apple.security.temporary-exception.sbpl` for process execution outside the sandbox. These entitlements are incompatible with the Mac App Store. Distribution is via signed and notarised DMG only.
 - **Apple Silicon only** — mlx-lm requires Apple Silicon (M1+). Intel Macs are not supported.
 - **Ollama conflict** — ollmlx and Ollama cannot run simultaneously as both default to port 11434. Either quit Ollama first or change the port in Settings.

@@ -9,7 +9,7 @@ Three targets share one repository:
 - **OllmlxApp** — menubar app (AppKit + SwiftUI)
 - **ollmlx** — CLI (ArgumentParser, no AppKit)
 
-The daemon (`ServerManager`) spawns and monitors `mlx_lm.server` as a child process. The CLI and menubar app communicate with the daemon exclusively via HTTP on `localhost:11435`. The public OpenAI-compatible API is exposed on `localhost:11434` via a transparent proxy.
+The daemon (`ServerManager`) spawns and monitors `mlx_lm.server` as a child process. The CLI and menubar app communicate with the daemon exclusively via HTTP on `localhost:11435`. The public OpenAI-compatible API is exposed on `localhost:11434` via a transparent proxy. Ollama-compatible endpoints (`/api/tags`, `/api/version`, `/api/chat`, `/api/generate`) are also served on `:11434` so clients like Open WebUI can connect natively.
 
 Full implementation plan: `ollmlx-implementation-plan.md`
 
@@ -100,7 +100,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - **Daemon auto-start**: `DaemonServer` and `ProxyServer` are started automatically in `applicationDidFinishLaunching` via `Task.detached`
 - **Bootstrap detection**: Check both `OllmlxConfig.pythonPath` AND the default venv path `~/.ollmlx/venv/bin/python` — if either exists on disk, skip bootstrap and set config
 - **Settings window**: Always open as a standalone `NSWindow` via `AppDelegate` — **never** as a `.sheet()` on the NSPopover (sheets on popovers deadlock the entire app)
-- **Model selector**: The dropdown only updates a `@State` selection — it must **never** call `ServerManager.start()`. Starting/switching happens only when the user clicks the Start button
+- **Model selector**: The dropdown only updates a `@State` selection — it must **never** call `ServerManager.start()`. Starting/switching happens only when the user clicks the Start button. `MenuBarView` uses `.onChange(of: serverManager.state)` to sync the selected model when external clients trigger a model switch
 
 ### Security
 
@@ -122,6 +122,16 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - Streaming responses (`text/event-stream`) must be forwarded chunk-by-chunk — no full response buffering
 - `setUpstream(port:)` must be atomic — use a lock or actor to prevent races between old and new upstream
 - **URLSession lifecycle**: For streaming responses, `session.invalidateAndCancel()` must be called inside the `ResponseBody` closure (via `defer`), **not** on the outer function scope — the function returns the `Response` before the body closure executes, so a `defer` on the outer scope kills the session mid-stream
+
+### Ollama compatibility layer
+
+- Ollama-compatible routes (`/api/tags`, `/api/version`, `/api/chat`, `/api/generate`) are registered on `ProxyServer` (**before** catch-all routes so they take priority)
+- `/api/tags` reads from `ModelStore.refreshCached()` — does not need an upstream; `/api/version` is unauthenticated
+- `/api/chat` and `/api/generate` translate Ollama request/response format to/from OpenAI `/v1/chat/completions` — both streaming (ndjson) and non-streaming
+- `/api/chat` and `/api/generate` call `ensureModel()` before forwarding — if the requested model differs from the running model, it stops the current model and starts the requested one via `ServerManager`
+- `ensureModel()` reads `ServerManager.shared.state` via `MainActor.run {}` (synchronous check) then calls `stop()`/`start()` directly (which hop to main actor automatically since `ServerManager` is `@MainActor`)
+- **Do not use `MainActor.run` with async closures** — it only accepts synchronous closures. Call `@MainActor` async methods directly with `await` from nonisolated contexts
+- Ollama streaming responses use `application/x-ndjson` content type (one JSON object per line), not SSE
 
 ### Logging
 
@@ -162,7 +172,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 
 | Port | Purpose |
 |---|---|
-| `11434` | Public OpenAI-compatible API (clients connect here) |
+| `11434` | Public OpenAI-compatible + Ollama-compatible API (clients connect here) |
 | `11435` | Internal daemon control API (CLI/app only) |
 | Ephemeral | `mlx_lm.server` internal port, allocated dynamically |
 
@@ -193,7 +203,7 @@ After editing `project.yml`, always run `xcodegen generate` to rebuild `ollmlx.x
 - Do not buffer streaming proxy responses — forward chunks immediately
 - Do not put `defer { session.invalidateAndCancel() }` on the outer scope of proxy handlers that return streaming `ResponseBody` closures
 - Do not use `.sheet()` to present views from an NSPopover — it deadlocks the app
-- Do not call `ServerManager.start()` from model selector onChange — only from explicit Start button
+- Do not call `ServerManager.start()` from model selector onChange — only from explicit Start button or Ollama API model-switch logic
 - Do not use `/usr/bin/env` to find tools like `uv` from the macOS app — resolve absolute paths
 - Do not send SIGKILL without trying SIGINT first and waiting 5 seconds
 - Do not allow external connections without an API key being set
