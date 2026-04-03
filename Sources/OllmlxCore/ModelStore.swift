@@ -74,12 +74,15 @@ public final class ModelStore: Sendable {
 
     /// Pull a model using huggingface-cli from the venv. Returns an AsyncThrowingStream of PullProgress.
     /// Uses $VENV/bin/huggingface-cli — never the system PATH version.
+    /// Retries up to 3 times on failure with --resume-download, and kills stalled downloads after 60s of no output.
     public func pull(model: String) -> AsyncThrowingStream<PullProgress, Error> {
         let venvPath = config.venvPath
         let hfCLIPrimary = "\(venvPath)/bin/huggingface-cli"
         let hfCLIFallback = "\(venvPath)/bin/hf"
 
         let hfCache = hfCacheDir
+        let maxRetries = 3
+        let stallTimeoutSeconds: TimeInterval = 60
 
         return AsyncThrowingStream { continuation in
             let task = Task.detached { [logger] in
@@ -97,33 +100,6 @@ public final class ModelStore: Sendable {
                     return
                 }
 
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: hfCLI)
-                process.arguments = ["download", model]
-
-                let stderrPipe = Pipe()
-                process.standardError = stderrPipe
-                process.standardOutput = FileHandle.nullDevice
-
-                // Parse stderr for progress output from huggingface-cli
-                var lastBytesDownloaded: Int64 = 0
-                var lastBytesTotal: Int64? = nil
-
-                stderrPipe.fileHandleForReading.readabilityHandler = { handle in
-                    let data = handle.availableData
-                    guard !data.isEmpty,
-                          let line = String(data: data, encoding: .utf8) else { return }
-
-                    // huggingface-cli outputs progress lines like:
-                    // "Downloading model.safetensors: 45%|████      | 1.2G/2.7G [00:30<00:37, 40.5MB/s]"
-                    let parsed = Self.parseHFProgress(line: line, model: model)
-                    if let progress = parsed {
-                        lastBytesDownloaded = progress.bytesDownloaded
-                        lastBytesTotal = progress.bytesTotal
-                        continuation.yield(progress)
-                    }
-                }
-
                 // Helper to remove partial download on failure
                 let cleanupPartial = {
                     let dirName = "models--\(model.replacingOccurrences(of: "/", with: "--"))"
@@ -131,28 +107,117 @@ public final class ModelStore: Sendable {
                     try? fm.removeItem(atPath: partialPath)
                 }
 
-                do {
-                    try process.run()
-                    process.waitUntilExit()
-                } catch {
+                var lastError: Error?
+
+                for attempt in 1...maxRetries {
+                    if Task.isCancelled { break }
+
+                    // Emit retry status for attempts after the first
+                    if attempt > 1 {
+                        continuation.yield(PullProgress(
+                            modelID: model,
+                            bytesDownloaded: 0,
+                            bytesTotal: nil,
+                            description: "Retrying... (attempt \(attempt)/\(maxRetries))"
+                        ))
+                        // Wait 5 seconds before retrying
+                        try? await Task.sleep(nanoseconds: 5_000_000_000)
+                        if Task.isCancelled { break }
+                    }
+
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: hfCLI)
+                    process.arguments = ["download", "--resume-download", model]
+
+                    let stderrPipe = Pipe()
+                    process.standardError = stderrPipe
+                    process.standardOutput = FileHandle.nullDevice
+
+                    // Track last output time for stall detection
+                    let lastOutputTime = UnsafeMutablePointer<TimeInterval>.allocate(capacity: 1)
+                    lastOutputTime.pointee = Date().timeIntervalSince1970
+                    defer { lastOutputTime.deallocate() }
+
+                    stderrPipe.fileHandleForReading.readabilityHandler = { handle in
+                        let data = handle.availableData
+                        guard !data.isEmpty,
+                              let line = String(data: data, encoding: .utf8) else { return }
+
+                        lastOutputTime.pointee = Date().timeIntervalSince1970
+
+                        let parsed = Self.parseHFProgress(line: line, model: model)
+                        if let progress = parsed {
+                            continuation.yield(progress)
+                        }
+                    }
+
+                    do {
+                        try process.run()
+                    } catch {
+                        stderrPipe.fileHandleForReading.readabilityHandler = nil
+                        lastError = error
+                        continue
+                    }
+
+                    // Stall watchdog: poll every 5 seconds, kill if no output for 60s
+                    var stalledOut = false
+                    while process.isRunning {
+                        if Task.isCancelled {
+                            process.interrupt()
+                            process.waitUntilExit()
+                            stderrPipe.fileHandleForReading.readabilityHandler = nil
+                            continuation.finish()
+                            return
+                        }
+
+                        let elapsed = Date().timeIntervalSince1970 - lastOutputTime.pointee
+                        if elapsed >= stallTimeoutSeconds {
+                            logger.error("Download stalled for \(Int(elapsed))s, killing process (attempt \(attempt)/\(maxRetries))")
+                            process.interrupt()
+                            // Wait up to 5 seconds for graceful shutdown, then force kill
+                            let deadline = Date().addingTimeInterval(5)
+                            while process.isRunning && Date() < deadline {
+                                Thread.sleep(forTimeInterval: 0.1)
+                            }
+                            if process.isRunning {
+                                process.terminate()
+                            }
+                            stalledOut = true
+                            break
+                        }
+
+                        Thread.sleep(forTimeInterval: 5)
+                    }
+
+                    if !stalledOut {
+                        process.waitUntilExit()
+                    }
+
                     stderrPipe.fileHandleForReading.readabilityHandler = nil
-                    cleanupPartial()
-                    continuation.finish(throwing: error)
-                    return
-                }
 
-                stderrPipe.fileHandleForReading.readabilityHandler = nil
+                    if stalledOut {
+                        lastError = ServerError.modelNotFound(
+                            "Download stalled — no progress for \(Int(stallTimeoutSeconds)) seconds (attempt \(attempt)/\(maxRetries))"
+                        )
+                        continue
+                    }
 
-                if process.terminationStatus != 0 {
-                    cleanupPartial()
-                    continuation.finish(throwing: ServerError.modelNotFound(
+                    if process.terminationStatus == 0 {
+                        logger.info("Model pull complete: \(model)")
+                        continuation.finish()
+                        return
+                    }
+
+                    lastError = ServerError.modelNotFound(
                         "huggingface-cli download failed with exit code \(process.terminationStatus)"
-                    ))
-                    return
+                    )
                 }
 
-                logger.info("Model pull complete: \(model)")
-                continuation.finish()
+                // All retries exhausted — clean up partial download and throw
+                cleanupPartial()
+                continuation.finish(throwing: lastError ?? ServerError.modelNotFound(
+                    "huggingface-cli download failed after \(maxRetries) attempts"
+                ))
             }
 
             continuation.onTermination = { _ in
